@@ -1,0 +1,652 @@
+---
+title: "Centrum Reviews Analysis"
+author: "Advanced Analytics"
+date: "November 29, 2020"
+output:
+  html_document: default
+  pdf_document: default
+  word_document: default
+always_allow_html: yes
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+# Load Packages necessary for the analysis
+require(tidytext)
+require(tidyverse)
+require(Matrix)
+require(glinternet)
+require(glmnet)
+require(plotmo)
+require(caret)
+require(topicmodels)
+require(wordcloud)
+require(ggwordcloud)
+require(stringr)
+require(SnowballC) 
+require(gridExtra)
+require(digest)
+options(warn = -1)
+require(here)
+
+# File address (This is the file that has to be processed) - Code changes whether is Clavis or Meltwater
+h <- "C:/Users/alvar/Documents/NJIT/Independent Study/data/Review Details_2020-11-30.xlsx"
+
+
+readxl::read_xlsx(h) %>% dplyr::filter(brand == "Centrum") %>%
+  dplyr::select(online_store,brand,category,sub_category,
+                product_description,review_date,review_rating,
+                review_title,review_text,matched_keywords,
+                parent_review,manufacturers_response,
+                helpful_review_count,review_hash_id) -> R_Centrum
+
+# Flag Reviews that are part of a promotion
+stringr::str_detect(R_Centrum$review_text,"This review was collected as part of a promotion.") -> R_Centrum$isPromoReview
+
+# Replace text that is marking the promotion, remove punctuation
+R_Centrum$review_text %>% 
+  stringr::str_replace_all("\\[This review was collected as part of a promotion.]","") %>% 
+  stringr::str_replace_all("-","") %>% 
+  stringr::str_replace_all("'","") %>% 
+  stringr::str_replace_all("[[:punct:]]"," ") %>%
+  stringr::str_replace_all("  "," ") %>%
+  stringr::str_trim() %>% 
+  stringr::str_to_lower() -> R_Centrum$review_text_clean
+
+
+```
+
+## Centrum Reviews
+### Introduction
+
+We are going to analyze results of the Centrum Reviews at different E-commerce sites. The goal of this report is to do an exploratory analysis of the reviews of Centrum Products and find some attributes that could help the brand team activate against some of these insights.
+
+### Data facts 
+
+* __Data provider:__ Clavis Insight
+* __Reviews time range:__ from `r min(R_Centrum$review_date)` to `r max(R_Centrum$review_date)` 
+* __Number of Reviews Analyzed:__ `r nrow(R_Centrum)` 
+* __Online Stores:__ `r unique(R_Centrum$online_store)` 
+
+### 13 questions to know Centrum Reviews
+1. What are the main topics in the reviews about Centrum? 
+2. What are the attributes that consumers really care?
+3. What are the keywords/ phrases with the highest volume consumers used in the reviews?
+4. How we can use them on the content (title, bullets, and description) in communicating back to consumers?
+<!-- 5. Are there specific topics for positive>4 vs. Negative Ratings<3 -->
+5. Prioritize Customer Service Issues: For negative ratings which are < 3, how we can use the information here to make canned responses?
+6. Are there specific benefits related to individual sub-lines?
+7. Determine the Most Effective Communication Channels: For positive > 4, can we use the topics to build marketing communication program? Like email, or banner ad?
+8. Are certain line extensions/flavors more prone to bad reviews
+9. Plan product Improvements: Can we improve those bad flavors? If not, new flavors innovation and sunset the old ones?
+10. Is certain language need to be flagged or to be re-contacted?
+11. Prioritize Customer Service Issues: Which customer segments have the strongest opinions?
+12. Can we find out the happiest customer segment and reward them? Worst customer segment to find out how we can improve? Flavors/packages/shipment/restore?
+13. What is the specific verbatim related to holiday?
+<!-- 16. Are there specific benefits related to individual sublines? -->
+<!-- 17. Can we get a list of keywords/phrase for each subline/sub-brand? -->
+
+```{r PreProcess, message=FALSE, warning=FALSE, include=FALSE}
+
+# Create a word frequency chart
+R_Centrum %>% 
+  dplyr::select(review_hash_id,review_text_clean) %>% 
+  unnest_tokens(word,review_text_clean) %>% 
+  anti_join(get_stopwords(),by = "word") %>%
+  # mutate(word = wordStem(word)) %>% 
+  count(word, sort = TRUE) -> cntWords
+
+# Save the words with length 1 character and 2 characters-to remove
+cntWords %>% dplyr::filter(nchar(word) == 1) -> singles
+cntWords %>% dplyr::filter(nchar(word) == 2) -> doubles
+
+# Create Frequency Chart with removed terms
+R_Centrum %>% 
+  dplyr::select(review_hash_id,review_text_clean) %>% 
+  unnest_tokens(word,review_text_clean) %>% 
+  anti_join(get_stopwords(),by = "word") %>% 
+  # mutate(word = wordStem(word)) %>% 
+  anti_join(singles,by = "word") %>% 
+  anti_join(doubles,by = "word") %>%
+  dplyr::filter(word != "product") %>% 
+  # dplyr::filter(word != "vitamin") %>% 
+  dplyr::filter(word != "dont") %>% 
+  count(word, sort = TRUE) -> Review_wrds
+
+```
+
+### 1) What are the main topics in the reviews about Centrum?
+
+Overall most of the reviews for Centrum are positive, averaging rating scores of `r round(mean(R_Centrum$review_rating),2)` out of 5.
+If we take a look at the most common terms, stands out 
+words like `vitamins`,`good taste` and `easy to take` (see word cloud words in grey and gold). 
+
+A second group of topics talk about product characteristics both good like `value`, `price` and bad like `melted product`, `upset stomach`  (see word cloud words in orange). 
+
+Finally less popular are mentions around `energy`,`daily routine` or `sugars` that speak about some of the uses or views of the product.
+
+```{r wordcloud, echo=FALSE, fig.align='center', message=FALSE, warning=FALSE, cache=TRUE}
+
+# Word Cloud
+set.seed(123)
+Review_wrds %>%  
+  with(wordcloud(word, n, 
+                 max.words = 200, min.freq = 1,
+                 rot.per = .35,random.order = FALSE, 
+                 colors = brewer.pal(8,"Dark2")))
+```
+
+<!-- We created an algorithm to try classify the topics that most people talk about in the reviews. -->
+<!-- In general the topics of discussion are as follow:  -->
+
+
+```{r topics, message=FALSE, warning=FALSE, include=FALSE}
+R_Centrum %>% pull(review_text_clean) %>% sapply(.,digest::digest,algo = 'sha1') -> R_Centrum$review_hash_id_unique
+
+R_Centrum %>% 
+  dplyr::select(review_hash_id_unique,review_text_clean) %>% distinct() %>% 
+  unnest_tokens(word,review_text_clean) %>% 
+  anti_join(get_stopwords(),by = "word") %>% 
+  mutate(word = wordStem(word)) %>% 
+  anti_join(singles,by = "word") %>% 
+  anti_join(doubles,by = "word") %>%
+  dplyr::filter(word != "product") %>% 
+  # dplyr::filter(word != "vitamin") %>% 
+  dplyr::filter(word != "dont") -> Rw 
+
+Rw %>% count(word,review_hash_id_unique, sort = TRUE) %>% select(review_hash_id_unique) %>% distinct() %>%  nrow() -> nr
+sampling <- sample(x = 1:nr, replace = FALSE,size = nr*0.8 )
+Rw %>% select(review_hash_id_unique) %>% distinct() -> all_id
+all_id[sampling,] -> train
+all_id[-sampling,] -> test
+
+Rw %>% inner_join(train) %>% count(review_hash_id_unique,word, sort = T) %>% 
+  cast_dtm(review_hash_id_unique,word,n) -> dtm_Rev_train
+Rw %>% inner_join(test) %>% count(review_hash_id_unique,word, sort = T) %>% 
+  cast_dtm(review_hash_id_unique,word,n) -> dtm_Rev_test
+
+
+LDA(dtm_Rev_train,k = 5, control = list(seed = 1234)) -> reviews_lda
+
+
+
+top_terms <- tidy(reviews_lda) %>%
+  group_by(topic) %>%
+  top_n(10, beta) %>%
+  ungroup() %>%
+  arrange(topic, -beta) 
+
+  spread(top_terms,key = topic,value = beta) %>% 
+    arrange(-`1`,-`2`,-`3`,-`4`,-`5`)
+            # ,`6`,`7`,`8`,`9`,`10`) %>% View()
+  #   print(width = Inf,n =100)
+
+```
+    
+<!-- When summarizing the topics present in the reviews, we find 5 main topics. -->
+
+<!-- * _Product Experience:_ Which includes experience from sampling program and purchasing experience. -->
+<!-- * _Forms and Innovation:_ With several references to Probiotics, Energy and Hydration, as well as gummy and powder form. -->
+<!-- * _Flavor and Assortment:_ Normally love for the flavor but also complaints about certain flavors. -->
+<!-- * _Daily Routine:_ Reviews on how people incorporate Emergen-c in their daily routines to stay healthy -->
+<!-- * _Sickness Prevention:_ How Emergen-C helps boost immune system and prevents consumers from getting sick, or helping them when they start feeling sintoms such as sore throat. -->
+
+### 2. What are the attributes that consumers really care?
+
+```{r bagOfWords, message=FALSE, warning=FALSE, include=FALSE}
+
+R_Centrum %>% 
+  dplyr::select(review_hash_id,review_text_clean) %>%
+  unnest_tokens(word,review_text_clean) %>% 
+  anti_join(get_stopwords(),by = "word") %>% 
+  mutate(word = wordStem(word)) %>%
+  anti_join(singles,by = "word") %>% 
+  anti_join(doubles,by = "word") %>%
+  dplyr::filter(word != "product") %>% 
+  # dplyr::filter(word != "vitamin") %>% 
+  dplyr::filter(word != "dont") -> Review_wrds
+
+Review_wrds %>% count(review_hash_id,word, sort = T) %>% 
+  cast_tdm(word,review_hash_id,n) -> tdm_Rev
+
+
+Review_wrds %>% arrange(review_hash_id) %>% count(review_hash_id,word, sort = T) %>% 
+  cast_sparse(review_hash_id,word,n) -> Rev_wrds_sparse
+
+
+Rev_wrds_sparse -> x
+x[order(rownames(x)),] -> x
+
+R_Centrum %>% dplyr::filter(review_hash_id %in% rownames(x)) -> R_Centrum_2
+R_Centrum_2[order(R_Centrum_2$review_hash_id),] -> y
+y$review_rating -> y
+
+set.seed(012345)
+sample(1:nrow(x),100) -> s1
+x[-s1,] -> X
+y[-s1] -> Y
+x[s1,] -> xi
+y[s1] -> yi
+
+
+glmnet::glmnet(x = X, y = Y,alpha = 1,family = "multinomial",type.multinomial = "grouped") -> fit
+cv.glmnet(X,Y) -> cvl
+cvl$lambda.min -> cvlmin
+plot(cvl)
+# rownames(xi)[1]
+
+cbind(predict(fit,newx = xi, s = c(0.01,0.005),type = "class"),yi) -> p1
+cbind(predict(fit,newx = xi, s = cvlmin,type = "class"),yi) -> p2
+cbind(predict(fit,newx = X, s = cvlmin, type = "class"),Y) -> p3 
+# table(p3[,c(1)],p3[,c(2)],dnn = c("Prediction","Actual"))
+# table(p1[,c(2)],p1[,c(3)],dnn = c("Prediction","Actual"))
+# table(p2[,c(1)],p2[,c(2)],dnn = c("Prediction","Actual"))
+caret::confusionMatrix(  table(p2[,c(1)],p2[,c(2)],dnn = c("Prediction","Actual"))) -> cM
+cM$overall["Accuracy"] -> Acc  
+# rownames(xi)[p1[,1] != p1[,3]] -> miss
+# rownames(xi)[p2[,1] != p2[,2]] -> miss
+# R_Centrum[R_Centrum$review_hash_id %in% miss,c("review_rating","review_text")] 
+Acc
+```
+
+In order to see what attributes are the most important for consumers when it comes to providing a rating, we created an algorithm to predict review rating based on the words people use.
+We can then see what are the words most associated with higher ratings.
+
+Our algorithm predicts review rating with a `r round(Acc,2)*100` % accuracy (out-of-sample), with the lowest accuracy on 3 star ratings, mainly missclasified as 4 star rating comments. 
+
+Given this the most important sentimentally charged words that predict each category are:
+
+```{r topWords_Rating, echo=FALSE, message=FALSE, warning=FALSE}
+coef(fit,s = cvlmin) -> cf
+
+is.word  <- function(x) x %in% GradyAugmented # or use any dataset from package
+
+data.frame(terms = rownames(cf$`1`)[order(cf$`1`,decreasing = TRUE)],coef = cf$`1`[order(cf$`1`,decreasing = TRUE)]) %>%
+  # .[which(is.word(.$terms)),] %>%  
+  head(40) -> w1
+
+data.frame(terms = rownames(cf$`2`)[order(cf$`2`,decreasing = TRUE)],coef = cf$`2`[order(cf$`2`,decreasing = TRUE)]) %>%
+  # .[which(is.word(.$terms)),] %>%  
+  head(40) -> w2
+
+data.frame(terms = rownames(cf$`3`)[order(cf$`3`,decreasing = TRUE)],coef = cf$`3`[order(cf$`3`,decreasing = TRUE)]) %>%
+  # .[which(is.word(.$terms)),] %>%  
+  head(40) -> w3
+
+data.frame(terms = rownames(cf$`4`)[order(cf$`4`,decreasing = TRUE)],coef = cf$`4`[order(cf$`4`,decreasing = TRUE)]) %>%
+  # .[which(is.word(.$terms)),] %>%  
+  head(40) -> w4
+
+data.frame(terms = rownames(cf$`5`)[order(cf$`5`,decreasing = TRUE)],coef = cf$`5`[order(cf$`5`,decreasing = TRUE)]) %>%
+  # .[which(is.word(.$terms)),] %>%  
+  head(50) -> w5
+
+bing <- get_sentiments("bing")
+
+data.frame(sentiment = bing$sentiment,word = bing$word,term = wordStem(bing$word)) %>% group_by(sentiment,term) %>% summarise(word = first(word)) -> bing
+
+w1 %>% inner_join(bing,by = c("terms" = "term")) %>% head(9) %>% bind_rows(
+(w2 %>% inner_join(bing,by = c("terms" = "term")) %>% head(9))) %>% group_by(terms) %>% summarise(word = first(word), sentiment = first(sentiment), coef = mean(coef)) -> terms_neg_Rating
+
+w3 %>% inner_join(bing,by = c("terms" = "term")) %>% head(9) %>% bind_rows(
+(w4 %>% inner_join(bing,by = c("terms" = "term")) %>% head(9))) %>% group_by(terms) %>% summarise(word = first(word), sentiment = first(sentiment), coef = mean(coef)) -> terms_neu_Rating
+
+w5 %>% inner_join(bing,by = c("terms" = "term")) %>% head(50) %>% dplyr::filter(sentiment == "positive") -> terms_pos_Rating
+
+terms_neg_Rating$Rating <- "1-2 stars"
+terms_neu_Rating$Rating <- "3-4 stars"
+terms_pos_Rating$Rating <- "5 stars"
+
+Review_wrds %>% group_by(word) %>% count() -> cnt_Words
+
+bind_rows(terms_neg_Rating,terms_neu_Rating,terms_pos_Rating) %>% 
+  inner_join(cnt_Words, by = c("terms" = "word")) %>% 
+  mutate(Importance = (coef-min(coef))/(max(coef)-min(coef)),
+         frequency = n,
+         n_scale = ((n-min(n))/(max(n)-min(n)))+1) -> Ratings_Words
+
+```
+
+
+
+```{r Rating_Words, echo=FALSE, fig.height=8, fig.width=8, message=FALSE, warning=FALSE, fig.align="center"}
+
+  Ratings_Words %>% 
+  ggplot(aes(x = Rating, y = Importance, colour = sentiment, label = word)) + 
+  ggrepel::geom_label_repel(size = 5) + 
+  geom_count(aes(colour = sentiment,size = frequency)) + cowplot::theme_cowplot() + theme(legend.position = "bottom") + 
+  geom_point(size = NA) +
+  scale_color_manual(values = c("firebrick","darkblue")) +
+  labs(colour = "") +
+  guides(colour = guide_legend(override.aes = list(size = 4))) +
+  ggtitle("Emotionally charged comments predictive of User Rating") + 
+  xlab(label = "User Star Rating (Negative, Neutral, Positive)") + 
+  ylab(label = "Importance (0.00 -1.00 Index)")  
+
+```
+
+From this chart we see that for Negative reviews (1-2 stars) most predictive terms are just negative about the product. Words like `dislike` `funny` `aweful` or `bitter` speak to the taste of the product. Some others like `smell` are related to odor of the product. `Stale` references that the product does not stay fresh in the bottle for long. Finally some concepts like `contrariness` references that the product does not have a really as complete set of `vitamins` and `minerals` as some consumers would like.
+
+For neutral reviews (3-4 stars) we see a mix of positive and negative terms. Users find the product `desirable` and `pleasant` but again complaints about the product going `stale` quickly (mainly in reference to gummies), or not containing all the `vitamins` and `minerals` they would want in a Multivitamins.
+
+For positive reviews (5 stars) most important words are positive. Things like `Awesome` `perfect` `best` identify the users that really like the product. Given that on average our e-commerce reviews are 5 stars, we normally see that for a review to be negative, it must really accumulate negative terms for a user to rate them as negative.
+
+We also saw other terms that are not emotionally charged but are still correlated with the different categories. These are the categories that people care about:
+
+```{r Other_Terms_by_Rating, echo=FALSE, message=FALSE, warning=FALSE}
+w1$Rating <- "1-2 stars"
+w2$Rating <- "1-2 stars"
+w3$Rating <- "3-4 stars"
+w4$Rating <- "3-4 stars"
+w5$Rating <- "5 stars"
+
+bind_rows(w1,w2,w3,w4,w5) %>% anti_join(Ratings_Words,by = "terms") %>% group_by(Rating) %>% top_n(100,terms) -> AllOther_Rating
+tibble::tibble(`1-2 stars` = c("Gave me Stomachache", "Gummies Stuck", "High sugar", "Low potency", "Unlabeled pills"),
+  `3-4 stars` = c("Nice texture", "Good taste", "Chalky pill", "Good flavor", "Bad breath"),
+  `5 stars` = c("Good value", "Good quality", "Good price", "Eat for dessert instead of a mint", "Great but bad in Summer(blob,melt)" )
+  ) %>% DT::datatable(caption = "Attributes highly correlated to Rating",options = list(dom = 't'),rownames= FALSE)
+  
+```
+
+Remember that reviews with rating with 1-2 stars represent `r round((R_Centrum %>% dplyr::filter(review_rating %in% c(1,2)) %>% count()/R_Centrum %>% count())*100,2)` %, 
+3-4 stars represent `r round((R_Centrum %>% dplyr::filter(review_rating %in% c(3,4)) %>% count()/R_Centrum %>% count())*100,2)` %  
+while 5 stars reviews account for `r round((R_Centrum %>% dplyr::filter(review_rating %in% c(5)) %>% count()/R_Centrum %>% count())*100,2)` %
+
+*TODO: Future research: correlation between ratings and sales*
+
+### 3. What are the keywords/ phrases with the highest volume consumers used in the reviews?
+
+If we look at the most repeated keywords, now by the rating (positive being 5 stars, and negative less than 3 stars)
+as well as the most common phrases (3 words) we can find some of the highest volume reviews and understand how is this image playing out in the Consumer's point of view.
+
+```{r top_k_phases, echo=FALSE, fig.height=5, fig.width=10, message=FALSE, warning=FALSE}
+
+R_Centrum %>% 
+  dplyr::select(review_hash_id_unique,review_text) %>% distinct() %>% 
+  unnest_tokens(word,review_text,token = "words") %>% 
+  anti_join(get_stopwords(),by = "word") %>%
+  mutate(word = wordStem(word)) %>%
+  anti_join(singles,by = "word") %>%
+  anti_join(doubles,by = "word") %>%
+  dplyr::filter(word != "product") %>%
+  # dplyr::filter(word != "vitamin") %>%
+  dplyr::filter(word != "dont") -> keywords
+
+R_Centrum %>% dplyr::select(review_hash_id_unique,review_rating) %>% distinct() %>% 
+  mutate(Review_Type = case_when(.$review_rating > 4 ~ "Positive",
+                                 .$review_rating < 3 ~ "Negative",
+                                 TRUE ~ "Neutral")) -> R_Centrum_Type
+
+keywords %>% inner_join(R_Centrum_Type, by = "review_hash_id_unique") %>% mutate(word = wordStem(word)) %>% 
+  count(word,Review_Type, sort = TRUE) %>% dplyr::filter(nchar(word)>=3) %>% 
+  group_by(Review_Type) %>% top_n(n = 7,wt = n) %>% 
+  arrange(word,Review_Type,desc(n)) -> keywords_cnt
+
+g1 <- ggplot(keywords_cnt,aes(x = reorder(word,-n), y = n, fill = Review_Type)) + geom_col() +
+  xlab("Keywords") +
+  ylab("Frequency - Absolute") +
+  scale_fill_manual(name = "Review Type",values = c("Positive" = "forestgreen","Neutral" = "gray","Negative" = "Firebrick")) +
+  ggtitle("Top 7 Keywords in frequency by Rating") + cowplot::theme_half_open() +
+  theme(axis.text.x= element_text(size=8, angle = 45, hjust = 1),
+        legend.position = "none")
+
+# Top useful ngrams 
+
+R_Centrum %>% 
+  dplyr::select(review_hash_id_unique,review_text) %>% distinct() %>% 
+  unnest_tokens(word,review_text,token = "ngrams", n = 3) -> ngrams
+ngrams %>% count(word, sort = TRUE) %>% slice(2,11,15,19,21,37,41) -> ngrams_cnt
+R_Centrum_Type %>% inner_join(ngrams,by = "review_hash_id_unique") %>% inner_join(ngrams_cnt,by = "word") %>% 
+  dplyr::select(3,4,5) %>% distinct() %>%  arrange(word,Review_Type,desc(n)) -> ngrams_cnt
+
+g2 <- ggplot(ngrams_cnt,aes(x = reorder(word,-n), y = n, fill = Review_Type)) + geom_col() +
+  xlab("Phrases") +
+  ylab("Frequency - Absolute") +
+  scale_fill_manual(name = "Review Type",values = c("Positive" = "forestgreen","Neutral" = "gray","Negative" = "Firebrick")) +
+  ggtitle("Top 7 Keywords in frequency by Rating") + cowplot::theme_half_open() +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1,size=10))
+
+grid.arrange(g1, g2, nrow = 1)
+
+```
+
+
+It's not surprising to see that most of the most keywords with the highest volume come from the good reviews. However some keywords related to stomach (ache), expiration, or flavor are always related to negative comments. Later on we will see the time series for these terms to understand if this has to do with a specific batch or moment in time. 
+
+When we look at phrases, some of the attributes like easy to swallow and chew are not always connected to positive reviews. 
+We will check later how these attributes relate to each of the sub-lines in Centrum.  
+
+
+
+### 4. How we can use them on the content (title, bullets, and description) in communicating back to consumers?
+
+Seeing the data presented in the previous questions many of the complaints are related to the product or the freshness of Centrum. Some ideas about the contents we could use in communicating: 
+
+* _Benchmarks about ingredients_, compared to other brands. To address concerns about potency, completeness...
+* _Descriptions about the recommended dosage_, ie. Highlight "Take 2 gummies daily" to avoid quick expiration products
+* _Most liked/flavors_, based on comments and data. Help consumer choose the right flavor.  
+* _Special discounts_ during summer time for those people whose Centrum Gummies bottle melted.
+
+*TODO:Future Analysis on data that supports this*
+
+
+### 5. Prioritize Customer Service Issues: For negative ratings which are < 3, how we can use the information here to make canned responses?
+
+In the data collected, we did not see any manufacturer's response to customer complaints. So in order to provide a specific logic to give canned responses we have to define what type of comments we want to address. 
+As we addressed in question 2, most negative reviews are related to disliking the product
+
+From this chart we see that for Negative reviews (1-2 stars) most predictive terms are just negative about the product. Words like `dislike` `funny` `aweful` or `bitter` speak to the taste of the product. Some others like `smell` are related to odor of the product. `Stale` references that the product does not stay fresh in the bottle for long. Finally some concepts like `contrariness` references that the product does not have a really as complete set of `vitamins` and `minerals` as some consumers would like.
+
+*TODO: Find predictive algorithm that could identify product complaints. Check with team if this is what they mean by flaggeable language*
+
+```{r Flaggeable Language, eval=FALSE, include=FALSE}
+# R_Centrum  %>% dplyr::filter(is.na(manufacturers_response) == FALSE ) %>%
+#   select(review_title, review_text, manufacturers_response) %>% distinct() %>%
+#   DT::datatable()
+  
+```
+
+### 6. Are there specific benefits related to individual sub-lines?
+
+For this we have broken 4 down different sub-lines: Women, Men, Adult and All Other. In the word cloud the words with the largest size are the most unique and frequent words for each specific category. For example the words more prominent for women sub-line are quality, taken daily and good. On the other hand, Men seems to be more correlated with complains about stomach ache, expired product. Some interesting findings in this category is the appearance of the routine for Men with meals. All other category that encapsulates mainly product. The core business "Adult" is not very differentiated in topics from the other sub-lines, that's why we see lower number of different terms. 
+
+We also broke down individual form for the sub-lines into Gummies, Tablets and Liquid. Because Liquid has very few comments and it's highly differentiated from the other forms we removed it from the analysis. As a result we can see how gummies own terms like taste and flavor whereas tablet is more associated with the legacy brand name Centrum.
+
+
+```{r Sublines, echo=FALSE, fig.height=10, fig.width=8, message=FALSE, warning=FALSE}
+
+R_Centrum %>% 
+  mutate(
+    Type = case_when(
+      grepl(pattern = "Women",x = product_description) ~ "Women",
+      grepl(pattern = "Men", x = product_description) ~ "Men",
+      grepl(pattern = "Adult", x = product_description) ~"Adult",
+      grepl(pattern = "Kid", x = product_description) ~ "Kids",
+                   TRUE ~ "All Other"),
+    Form = case_when(
+      grepl(pattern = "Gummi",x = product_description) ~ "Gummies",
+      grepl(pattern = "Liqui",x = product_description) ~ "Liquid",
+                   TRUE ~ "Tablet")
+    )  %>% 
+  unnest_tokens(word,review_text_clean) %>% 
+  anti_join(get_stopwords(),by = "word") %>% 
+  # mutate(word = wordStem(word)) %>% 
+  anti_join(singles,by = "word") %>% 
+  anti_join(doubles,by = "word") %>%
+  dplyr::filter(word != "product") %>% 
+  # dplyr::filter(word != "vitamin") %>% 
+  dplyr::filter(word != "dont") -> R_Centrum_3 
+  R_Centrum_3 %>% count(word,Type, sort = TRUE) -> ByType
+  R_Centrum_3 %>% count(word,Form, sort = TRUE) -> ByForm
+
+ByType %>% dplyr::filter(Type != "Kids") %>%  
+  cast_tdm(term = word, document = Type, value = n) %>% 
+  as.matrix() %>% comparison.cloud(max.words = 200,rot.per = .35,
+                                random.order = FALSE, title.size=1.5)
+
+ByForm %>% dplyr::filter(Form != "Liquid") %>% 
+  cast_tdm(term = word, document = Form, value = n) %>% 
+  as.matrix() %>% comparison.cloud(max.words = 200,rot.per = .35,
+                                random.order = FALSE, title.size=1.5)
+
+
+
+
+```
+
+
+
+### 7. Determine the Most Effective Communication Channels: For positive > 4, can we use the topics to build marketing communication program? Like email, or banner ad?
+
+*TODO: For this we should incorporate regular Social Mentions. I haven't found anything leading to channel from descriptions*
+
+
+### 8. Are certain line extensions/flavors more prone to bad reviews
+
+When we try to break out sub-lines by flavors we see that most products have a description with several flavors for the same product. for this reason it's hard to find specifically if there are flavors or line extensions that are more prone to bad reviews. We broke the classes by product description and found that 3 sub-lines have more than 30% of negative comments
+
+```{r Sublines_rev, echo=FALSE, message=FALSE, warning=FALSE}
+# 
+# R_Centrum_3 %>%   group_by(Type,review_rating) %>% summarise(cnt = n_distinct(review_hash_id)) %>% 
+#   ungroup() %>% mutate(Rating = case_when(review_rating > 4 ~ "Positive",
+#                                           review_rating < 3 ~ "Negative",
+#                                           TRUE ~ "Neutral")) %>% 
+#   group_by(Type,Rating) %>% summarise(cnt = sum(cnt)) -> R_Centrum_Type_cnt
+# 
+# R_Centrum_Type_cnt %>% spread(key = Rating,value = cnt) %>% 
+#   ggplot(aes(x = Type, y = Negative/(Negative+Neutral+Positive),fill = Type)) + 
+#   scale_y_continuous(labels = scales::percent) +
+#   # scale_fill_manual(name = "Review Type",values = c("Positive" = "forestgreen","Neutral" = "gray","Negative" = "Firebrick")) +
+#   geom_col() + ylab("Percent Negative Reviews") + ggtitle("Top Negative Reviews by Subline") -> g1
+# 
+# R_Centrum_3 %>% group_by(Form,review_rating) %>% summarise(cnt = n_distinct(review_hash_id)) %>% 
+#   ungroup() %>% mutate(Rating = case_when(review_rating > 4 ~ "Positive",
+#                                           review_rating < 3 ~ "Negative",
+#                                           TRUE ~ "Neutral")) %>% 
+#   group_by(Form,Rating) %>% summarise(cnt = sum(cnt)) -> R_Centrum_Form_cnt
+# 
+# R_Centrum_Form_cnt %>% spread(key = Rating,value = cnt) %>% 
+#   ggplot(aes(x = Form, y = Negative/(Negative+Neutral+Positive),fill = Form)) + 
+#   scale_y_continuous(labels = scales::percent) +
+#   geom_col() + ylab("Percent Negative Reviews") + ggtitle("Top Negative Reviews by Form") + 
+#   theme(axis.text.x = element_text(angle = 90, hjust = 1,vjust = .2)) -> g2
+
+R_Centrum_3 %>% group_by(product_description,review_rating) %>% summarise(cnt = n_distinct(review_hash_id)) %>% 
+  ungroup() %>% mutate(Rating = case_when(review_rating > 4 ~ "Positive",
+                                          review_rating < 3 ~ "Negative",
+                                          TRUE ~ "Neutral")) %>% 
+  group_by(product_description,Rating) %>% summarise(cnt = sum(cnt)) -> R_Centrum_Product_cnt
+
+R_Centrum_Product_cnt %>% spread(key = Rating,value = cnt) %>% dplyr::filter(!is.na(Negative)&!is.na(Neutral)) %>% 
+  dplyr::mutate(Descript = stringr::str_sub(gsub("Centrum ","",product_description),1,20)) %>% 
+  group_by(Descript) %>% 
+  summarise(Negative = sum(Negative), Neutral = sum(Neutral), Positive = sum(Positive)) %>% 
+  dplyr::mutate(perc = (Negative/(Negative+Neutral+Positive))) %>%
+  dplyr::filter((Negative+Neutral+Positive)>4) %>% 
+  ggplot(aes(x = Descript, y = Negative/(Negative+Neutral+Positive),fill = Descript)) + 
+  scale_y_continuous(labels = scales::percent) +
+  geom_col() + ylab("Percent Negative Reviews") + ggtitle("Top Negative Reviews by product") +
+  xlab("Product Description") +
+  theme(legend.position = "none",axis.text.x = element_text(angle = 45, hjust = 1.1,vjust = 1.1)) -> g3
+
+# g1
+# g2
+g3
+  
+
+```
+
+
+If we breakout the bad comments for these three skus most of the complaints are related to taste and the product melting.
+
+```{r complains_subline, echo=FALSE, message=FALSE, warning=FALSE}
+R_Centrum_Product_cnt %>% spread(key = Rating,value = cnt) %>% 
+  dplyr::filter(!is.na(Negative)&!is.na(Neutral)) %>% 
+  group_by(Product = stringr::str_sub(gsub("Centrum ","",product_description),1,20)) %>% 
+  summarise(Negative = sum(Negative), Neutral = sum(Neutral), Positive = sum(Positive)) %>% 
+  dplyr::mutate(perc = (Negative/(Negative+Neutral+Positive))) %>% 
+  dplyr::filter((Negative+Neutral+Positive)>4) %>% 
+  dplyr::filter(perc > 0.2) -> tb
+
+tb$Product <- gsub("[(]|[+]","",tb$Product)
+R_Centrum_3 %>% dplyr::filter(grepl(paste0(tb$Product,collapse = "|"),R_Centrum_3$product_description)) %>% 
+  dplyr::filter(review_rating<3) %>% select(review_text) %>% distinct() %>% DT::datatable()
+  
+  
+```
+
+### 9. Plan product Improvements: Can we improve those bad flavors? If not, new flavors innovation and sunset the old ones?
+
+Based on he results we should be learning from the gummy lines with less complaints such as Omega which had less complains about taste and flavor.
+Besides flavor we should try to improve the product making it not melt at room temperature. 
+
+
+### 10. Is certain language need to be flagged or to be re-contacted?
+
+Language around stomach ache and side effects should be flagged for re-contacting. Also product with package defects should be flagged for recontacting and provided a replacement if this can be verified. Currently we are not re-contacting any product. According to the data.
+
+
+### 11. Prioritize Customer Service Issues: Which customer segments have the strongest opinions?
+### 12. Can we find out the happiest customer segment and reward them? Worst customer segment to find out how we can improve? Flavors/packages/shipment/restore?
+
+*TODO: Can we identify customer segments with Meltwater?*
+
+
+###13. What is the specific verbatim related to holiday?
+Let's first breakout number of reviews by date
+
+```{r Dates_Reviews, echo=FALSE, message=FALSE, warning=FALSE}
+
+R_Centrum %>% dplyr::filter(online_store != "AMAZONPRIMEPANTRY") %>% mutate(weekDate = lubridate::ceiling_date(review_date,unit = "week")) %>% group_by(weekDate,online_store) %>% summarise(`Number of Reviews` = n()) %>% ggplot(aes(x = weekDate, y = `Number of Reviews`)) + geom_line(aes(colour = online_store),size = 2) + cowplot::theme_cowplot()
+
+```
+
+As we can see the majority of reviews come from Amazon, and there are specific peaks throughout the year. The main peaks correspond to a sku name being transferred to a new sku name. All the previous reviews get carried over and we see a spike in reviews. 
+*TODO: is there a relationship (correlation) between reviews and sales?*
+
+If we only look at brand new reviews throughout the analyzed period we see the following
+
+
+```{r Dates_Reviews_clean, echo=FALSE, fig.width=10, message=FALSE, warning=FALSE}
+
+R_Centrum %>% mutate(weekDate = lubridate::ceiling_date(review_date,unit = "week")) %>%  
+    dplyr::mutate(Descript = stringr::str_sub(gsub("Centrum ","",product_description),1,12)) %>% 
+  group_by(review_text_clean,Descript) %>% summarise(weekDate = first(weekDate)) %>%
+  ungroup() %>% 
+  group_by(weekDate,Descript) %>% 
+  summarise(`Number of Reviews` = n()) %>% arrange(desc(`Number of Reviews`)) %>% 
+  ggplot(aes(x = weekDate,y = `Number of Reviews`, fill = Descript)) + geom_col() + theme(legend.position = "right") + ggtitle("Number of unique reviews by subline")
+
+```
+
+The main peaks come at the beginning of the year with consumers that have purchased the product for new year's resolution. 
+A second wave and third wave are from sampling program with consumers. 
+
+Related to holiday we can take a look at a word cloud for the beginning of the year
+
+```{r Cloud_holiday, echo=FALSE, message=FALSE, warning=FALSE}
+R_Centrum %>% 
+  dplyr::filter(review_date < as.Date("2019-02-01")) %>% 
+  dplyr::select(review_hash_id,review_text_clean) %>% 
+  unnest_tokens(word,review_text_clean) %>% 
+  anti_join(get_stopwords(),by = "word") %>% 
+  # mutate(word = wordStem(word)) %>% 
+  anti_join(singles,by = "word") %>% 
+  anti_join(doubles,by = "word") %>%
+  dplyr::filter(word != "product") %>% 
+  dplyr::filter(word != "vitamins") %>% 
+  dplyr::filter(word != "dont") %>% 
+  count(word, sort = TRUE) -> Review_wrds
+
+Review_wrds %>%  
+  with(wordcloud(word, n, 
+                 max.words = 100, min.freq = 1,
+                 rot.per = .35,random.order = FALSE, 
+                 colors = brewer.pal(8,"Dark2")))
+
+```
+
+We don't observe new trends during this period but we recommend to extend the time period to analyze more results.
+
+
+*TODO: Recommendation to add competitor set*

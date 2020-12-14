@@ -1,0 +1,340 @@
+---
+title: "Electoral Sentiment and Drivers"
+author: "Alvaro Aguado"
+date: "11/12/2020"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+theme_Publication <- function(base_size=14, base_family="sans") {
+  library(grid)
+  library(ggthemes)
+  (theme_foundation(base_size=base_size, base_family=base_family)
+    + theme(plot.title = element_text(face = "bold",
+                                      size = rel(1.2), hjust = 0.5, margin = margin(0,0,20,0)),
+            text = element_text(),
+            panel.background = element_rect(colour = NA),
+            plot.background = element_rect(colour = NA),
+            panel.border = element_rect(colour = NA),
+            axis.title = element_text(face = "bold",size = rel(1)),
+            axis.title.y = element_text(angle=90,vjust =2),
+            axis.title.x = element_text(vjust = -0.2),
+            axis.text = element_text(), 
+            axis.line.x = element_line(colour="black"),
+            axis.line.y = element_line(colour="black"),
+            axis.ticks = element_line(),
+            panel.grid.major = element_line(colour="#f0f0f0"),
+            panel.grid.minor = element_blank(),
+            legend.key = element_rect(colour = NA),
+            legend.position = "bottom",
+            legend.direction = "horizontal",
+            legend.box = "vetical",
+            legend.key.size= unit(0.5, "cm"),
+            #legend.margin = unit(0, "cm"),
+            legend.title = element_text(face="italic"),
+            plot.margin=unit(c(10,5,5,5),"mm"),
+            strip.background=element_rect(colour="#f0f0f0",fill="#f0f0f0"),
+            strip.text = element_text(face="bold")
+    ))
+  
+}
+scale_fill_Publication <- function(...){
+  library(scales)
+  discrete_scale("fill","Publication",manual_pal(values = c("#386cb0","#f87f01","#7fc97f","#ef3b2c","#feca01","#a6cee3","#fb9a99","#984ea3","#8C591D")), ...)
+  
+}
+scale_colour_Publication <- function(...){
+  library(scales)
+  discrete_scale("colour","Publication",manual_pal(values = c("#386cb0","#f87f01","#7fc97f","#ef3b2c","#feca01","#a6cee3","#fb9a99","#984ea3","#8C591D")), ...)
+  
+}
+### Dark theme for ggplot plots
+theme_dark_grey <- function(base_size=14, base_family="sans") {
+  library(grid)
+  library(ggthemes)
+  (theme_foundation(base_size=base_size, base_family=base_family)
+    + theme(plot.title = element_text(face = "bold", colour = '#ffffb3',
+                                      size = rel(1.2), hjust = 0.5, margin = margin(0,0,20,0)),
+            text = element_text(),
+            panel.background = element_rect(colour = NA, fill = 'grey20'),
+            plot.background = element_rect(colour = NA, fill = '#262626'),
+            panel.border = element_rect(colour = NA),
+            axis.title = element_text(face = "bold",size = rel(1), colour = 'white'),
+            axis.title.y = element_text(angle=90,vjust =2),
+            axis.title.x = element_text(vjust = -0.2),
+            axis.text = element_text(colour = 'grey70'), 
+            axis.line.x = element_line(colour="grey70"),
+            axis.line.y = element_line(colour="grey70"),
+            axis.ticks = element_line(colour="grey70"),
+            panel.grid.major = element_line(colour="#262626"),
+            panel.grid.minor = element_blank(),
+            legend.background = element_rect(fill ='#262626'),
+            legend.text = element_text(color = 'white'),
+            legend.key = element_rect(colour = NA, fill = '#262626'),
+            legend.position = "bottom",
+            legend.direction = "horizontal",
+            legend.box = "vetical",
+            legend.key.size= unit(0.5, "cm"),
+            #legend.margin = unit(0, "cm"),
+            legend.title = element_text(face="italic", colour = 'white'),
+            plot.margin=unit(c(10,5,5,5),"mm"),
+            strip.background=element_rect(colour="#2D3A4C",fill="#2D3A4C"),
+            strip.text = element_text(face="bold", colour = 'white')
+    ))
+}
+scale_fill_Publication_dark <- function(...){
+  library(scales)
+  discrete_scale("fill","Publication",manual_pal(values = c("#fbb4ae","#b3cde3","#ccebc5","#decbe4","#fed9a6","#ffffcc","#e5d8bd","#fddaec","#f2f2f2")), ...)
+  
+}
+scale_colour_Publication_dark <- function(...){
+  library(scales)
+  discrete_scale("colour","Publication",manual_pal(values = c("#fbb4ae","#b3cde3","#ccebc5","#decbe4","#fed9a6","#ffffcc","#e5d8bd","#fddaec","#f2f2f2")), ...)
+  
+}
+# theme_transparent <- function(base_size=14, base_family="sans") {
+#    library(grid)
+#    library(ggthemes)
+#    (theme_foundation(base_size=base_size, base_family=base_family)
+#       + theme(plot.title = element_text(face = "bold", colour = '#ffffb3',
+#                                         size = rel(1.2), hjust = 0.5),
+#               text = element_text(),
+#               panel.background = element_rect(colour = NA, fill = 'transparent'),
+#               plot.background = element_rect(colour = NA, fill = 'transparent'),
+#               panel.border = element_rect(colour = NA),
+#               axis.title = element_text(face = "bold",size = rel(1), colour = 'white'),
+#               axis.title.y = element_text(angle=90,vjust =2),
+#               axis.title.x = element_text(vjust = -0.2),
+#               axis.text = element_text(colour = 'grey70'), 
+#               axis.line.x = element_line(colour="grey70"),
+#               axis.line.y = element_line(colour="grey70"),
+#               axis.ticks = element_line(colour="grey70"),
+#               panel.grid.major = element_line(colour="#262626"),
+#               panel.grid.minor = element_blank(),
+#               legend.background = element_rect(fill = 'transparent'),
+#               legend.text = element_text(color = 'white'),
+#               legend.key = element_rect(colour = NA, fill = 'grey20'),
+#               legend.position = "bottom",
+#               legend.direction = "horizontal",
+#               legend.box = "vetical",
+#               legend.key.size= unit(0.5, "cm"),
+#               #legend.margin = unit(0, "cm"),
+#               legend.title = element_text(face="italic", colour = 'white'),
+#               plot.margin=unit(c(10,5,5,5),"mm"),
+#               strip.background=element_rect(colour="#2D3A4C",fill="#2D3A4C"),
+#               strip.text = element_text(face="bold", colour = 'white')
+#       ))
+# }
+theme_dark_blue <- function(base_size=14, base_family="sans") {
+  library(grid)
+  library(ggthemes)
+  (theme_foundation(base_size=base_size, base_family=base_family)
+    + theme(plot.title = element_text(face = "bold", colour = '#ffffb3',
+                                      size = rel(1.2), hjust = 0.5, margin = margin(0,0,20,0)),
+            text = element_text(),
+            panel.background = element_rect(colour = NA, fill = '#282C33'),
+            plot.background = element_rect(colour = NA, fill = '#282C33'),
+            panel.border = element_rect(colour = NA),
+            axis.title = element_text(face = "bold",size = rel(1), colour = 'white'),
+            axis.title.y = element_text(angle=90,vjust =2),
+            axis.title.x = element_text(vjust = -0.2),
+            axis.text = element_text(colour = 'grey70'), 
+            axis.line.x = element_line(colour="grey70"),
+            axis.line.y = element_line(colour="grey70"),
+            axis.ticks = element_line(colour="grey70"),
+            panel.grid.major = element_line(colour="#343840"),
+            panel.grid.minor = element_blank(),
+            legend.background = element_rect(fill ='#282C33'),
+            legend.text = element_text(color = 'white'),
+            legend.key = element_rect(colour = NA, fill = '#282C33'),
+            legend.position = "bottom",
+            legend.direction = "horizontal",
+            legend.box = "vetical",
+            legend.key.size= unit(0.5, "cm"),
+            #legend.margin = unit(0, "cm"),
+            legend.title = element_text(face="italic", colour = 'white'),
+            plot.margin=unit(c(10,5,5,5),"mm"),
+            strip.background=element_rect(colour="#2D3A4C",fill="#2D3A4C"),
+            strip.text = element_text(face="bold", colour = 'white')
+    ))
+}
+```
+
+```{r packages, echo=TRUE}
+require(tidyverse)
+require(readxl)
+require(lubridate)
+require(ggthemes)
+require(scales)
+require(tm)
+require(tidytext)
+require(Matrix)
+require(topicmodels)
+require(stringr)
+require(SnowballC) 
+require(gridExtra)
+require(digest)
+```
+
+## Load data
+
+Data contains UTF-16LE encoding so we had to do a read line by line code. See the code [here]()
+
+```{r load_data, echo=FALSE, fig.height=6, fig.width=14}
+readRDS("df.rds") -> df
+readRDS("df2.rds") -> df2
+timeAnalysis <- read_excel("~/NJIT/IS735_Social_Media/Assignment 5/timeAnalysis.xlsx",
+                           col_types = c("date","numeric","numeric","numeric","numeric","numeric"))
+```
+
+## Show data plot
+Load high level count data and plot 
+
+
+```{r Tweets_by_type, echo=TRUE, fig.height=6, fig.width=14}
+timeAnalysis %>% mutate(datetime = as.POSIXct(datetime,tz = 'US/Eastern')) -> TimeAnals
+TimeAnals %>% gather(key = "Type",value = "Count",-datetime) %>% 
+  mutate(Type = Type %>% stringr::str_trim() %>% fct_relevel("Total","Retweets","Quoted","Original","Replies")) %>% 
+  ggplot(.,aes(x = datetime, y = Count, colour = Type,group = Type)) + geom_line(size = 2) +
+  geom_vline(xintercept = as_datetime("2020-11-04 00:00:00"), color = 'white', size = 2) +
+  scale_x_datetime(labels = date_format("%I:%M %p"), date_breaks = "4 hours", timezone = "EST") + 
+  ggtitle("#2020Election Tweets by Type during election night") + scale_colour_excel_new() +
+  xlab("Date Time") + ylab("Tweet Count") + theme_dark_blue() + 
+  ggplot2::annotate(geom = 'text', x = as.POSIXct("2020-11-03 01:00 AM",tz = "US/Eastern"), y = 15000,label = 'Nov 3rd', colour = 'white', size = 5) +
+  ggplot2::annotate(geom = 'text', x = as.POSIXct("2020-11-04 03:00 AM",tz = "US/Eastern"), y = 15000,label = 'Nov 4th', colour = 'white', size = 5) +
+  theme(text = element_text(size=20))
+```
+
+# Plotting granular data 
+
+```{r granular_data, echo=FALSE, fig.height=6, fig.width=14}
+df %>% select(Date,Time,Reach) %>% mutate(hour = lubridate::hour(Date)) -> df2
+df2 %>% mutate(Date0 = lubridate::as_date(Date)) %>% group_by(Date0,hour) %>% summarise(cnt = n(), Reach = sum(Reach), Time = min(Date)) %>% 
+  dplyr::filter(Date0 > "2020-11-02") %>%  
+  ggplot(aes(x = Time, y = cnt)) + geom_line(colour = 'white',size = 2) +
+  ggtitle("Tweet spikes by hour") + scale_colour_excel_new() +
+  scale_x_datetime(labels = date_format("%m-%d %I:%M %p"), date_breaks = "24 hours",timezone = "EST") + 
+  xlab("Date Time") + ylab("Tweet Count") + theme_dark_blue() + 
+  theme(text = element_text(size=20))
+```
+
+
+# Plot and run ARIMA model
+
+
+```{r ARIMA, echo=TRUE, fig.height=6, fig.width=14}
+df2 %>%  mutate(datetime = Date, Date = as.Date(Date)) %>% group_by(Date,hour) %>% summarise(cnt = n(), Reach = sum(Reach), Time = min(datetime)) %>% 
+  dplyr::filter(Date > "2020-11-02") -> df3
+forecast::auto.arima(df3$cnt) -> adf3
+ggplot(df3,aes(x = Time, y = cnt)) + geom_line(colour = 'white',size = 3) +
+  geom_line(aes(y = adf3$fitted),colour = 'blue',size = 2) +
+  geom_line(aes(y = adf3$residuals),colour = 'red',size = 2,linetype = 'dotted') +
+  geom_vline(xintercept = df3$Time[which(adf3$residuals > sd(adf3$residuals))],linetype = 'dashed',colour = 'yellow') +
+  ggtitle("Tweet spikes by hour") + scale_colour_excel_new() +
+  scale_x_datetime(labels = date_format("%d %I H %p"), date_breaks = "12 hours",minor_breaks = "6 hours") + 
+  xlab("Date Time") + ylab("Tweet Count") + theme_dark_blue() + 
+  theme(text = element_text(size=20))
+  
+```
+
+
+
+## LDA Model
+
+
+#### Plot terms
+
+```{r LDA_terms, echo=TRUE, fig.height=6, fig.width=14,cache=TRUE}
+df$Body %>% 
+  stringr::str_replace_all('([^[:ascii:]])([^[:ascii:]])+','\\1 \\2') %>% 
+  stringr::str_to_lower() %>%  
+  tm::removePunctuation() %>% 
+  stringr::str_replace_all("qt ", " ") %>%
+  stringr::str_replace_all("rt ", " ") %>%
+  # stringr::str_replace_all("http.+", "URL") %>% 
+  removeWords(stopwords()) %>%
+  stringr::str_replace_all("\\s+", " ") %>%
+  stringr::str_trim() -> df$text_clean
+df %>% pull(text_clean) %>% sapply(.,digest::digest,algo = 'sha1') -> df$uid
+pl <- df3$Time[which(adf3$residuals > sd(adf3$residuals))]
+df %>% janitor::clean_names() %>% 
+  dplyr::filter(.,between(date,pl[1],pl[1]+hours(1))) %>%  
+  dplyr::select(uid,text_clean) %>% distinct() %>% 
+  unnest_tokens(word,text_clean) %>% 
+  anti_join(get_stopwords(),by = "word") -> data_df
+for(i in 2:length(pl)){
+  df %>% janitor::clean_names() %>% 
+    dplyr::filter(.,between(date,pl[i],pl[i]+hours(1))) %>%  
+    dplyr::select(uid,text_clean) %>% distinct() %>% 
+    unnest_tokens(word,text_clean) %>% 
+    anti_join(get_stopwords(),by = "word") -> data_df2
+  
+  data_df <- bind_rows(data_df,data_df2)
+  
+}
+data_df %>% distinct() -> data_df
+data_df %>% count(uid,word, sort = T) %>% cast_dtm(uid,word,n) -> dtm_df 
+topicmodels::LDA(dtm_df,k = 5, control = list(seed = 1234)) -> text_lda5
+topicmodels::perplexity(text_lda5) -> perplexity_lda5
+df %>% janitor::clean_names() %>% 
+  dplyr::select(uid,text_clean) %>% distinct() %>% 
+  unnest_tokens(word,text_clean) %>% 
+  anti_join(get_stopwords(),by = "word") -> data_df_total
+data_df_total %>% count(uid,word, sort = T) %>% cast_dtm(uid,word,n) -> dtm_df_total 
+test.topics <- modeltools::posterior(text_lda5,dtm_df_total)
+test.topics2 <- apply(test.topics$topics,1,which.max)
+proj = data.frame(uid = names(test.topics2), topic = as.vector(test.topics2))
+top_terms <- tidy(text_lda5) %>%
+  group_by(topic) %>%
+  top_n(10, beta) %>%
+  ungroup() %>%
+  arrange(topic, -beta) 
+top_terms %>%
+  mutate(topic = factor(topic),
+         term = reorder_within(term, beta, topic)) %>%
+  ggplot(aes(term, beta, fill = topic)) +
+  geom_bar(alpha = 0.8, stat = "identity", show.legend = FALSE) +
+  scale_x_reordered() +
+  facet_wrap(~ topic, scales = "free", ncol = 3) +
+  coord_flip() +
+  ggtitle("Tweet topics by term") + theme_dark_blue() + 
+  theme(text = element_text(size=20))
+```
+
+
+
+#### Plot Time series LDA
+
+```{r LDA_timeseries, echo=TRUE, fig.height=6, fig.width=14, message=FALSE, warning=FALSE}
+df %>% inner_join(proj,by = c("uid" = "uid")) %>% 
+  select(Date,Time,topic) %>% mutate(hour = lubridate::hour(Date)) %>% 
+  mutate(Date0 = lubridate::as_date(Date)) %>% group_by(Date0,hour,topic) %>% 
+  summarise(cnt = n(), Time = min(Date)) %>% 
+  dplyr::filter(Date0 > "2020-11-02") %>%  mutate(topic = as.factor(topic)) %>% 
+  ggplot(aes(x = Time, y = cnt,colour = topic)) + geom_line(size = 2) +
+  geom_vline(xintercept = df3$Time[which(adf3$residuals > sd(adf3$residuals))],linetype = 'dashed',colour = 'yellow') +
+  ggtitle("Tweet topics by hour") + 
+  scale_x_datetime(labels = date_format("%m-%d %I:%M %p"), date_breaks = "24 hours",timezone = "EST") + 
+  xlab("Date Time") + ylab("Tweet Count") + theme_dark_blue() + 
+  theme(text = element_text(size=20))
+```
+
+
+
+
+
+```{r sentiment, echo=TRUE, fig.height=6, fig.width=14}
+df %>% 
+  select(Date,Time,Sentiment) %>% mutate(hour = lubridate::hour(Date)) %>% 
+  dplyr::filter(Sentiment %in% c("Negative","Positive")) %>% 
+  mutate(Date0 = lubridate::as_date(Date)) %>% group_by(Date0,hour,Sentiment) %>% 
+  summarise(cnt = n(), Time = min(Date)) %>% 
+  dplyr::filter(Date0 > "2020-11-02") %>%  
+  ggplot(aes(x = Time, y = cnt,colour = Sentiment)) + geom_line(size = 2) +
+  geom_vline(xintercept = df3$Time[which(adf3$residuals > sd(adf3$residuals))],linetype = 'dashed',colour = 'yellow') +
+  ggtitle("Tweet Sentiment by hour")  +
+  scale_x_datetime(labels = date_format("%m-%d %I:%M %p"), date_breaks = "24 hours",timezone = "EST") + 
+  xlab("Date Time") + ylab("Tweet Count") + theme_dark_blue() + 
+  theme(text = element_text(size=20))
+```
